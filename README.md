@@ -1,11 +1,10 @@
 # Game Information
-(Note: fill in this portion with information about your game.)
 
-Title: (TODO: your game's title)
+Title: Stickochet Robot
 
-Author: (TODO: your name)
+Author: Jim McCann
 
-Design Document: [TODO: name of design document](TODO: link to design document)
+Design Document: [Stickochet Robot](http://graphics.cs.cmu.edu/courses/15-466-f18/game0-designs/default/)
 
 Screen Shot:
 
@@ -13,11 +12,16 @@ Screen Shot:
 
 Difficulties Encountered:
 
-TODO: write several sentences about any difficulties you may have encountered in creating the game.
+I needed to re-write the board centering code to account for the skew.
+I needed to create some additional blender models for instructions, score, and to indicate which checkpoints had been picked up.
 
 Good Code:
 
-TODO: write a sentence or two about any code you think you did particularly well.
+I think the board representation is reasonable clean.
+
+Other Notes:
+
+I am using the font ["Tienne"](https://fonts.google.com/specimen/Tienne) designed by Vernon Adams.
 
 # Using This Base Code
 

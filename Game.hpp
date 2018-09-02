@@ -65,6 +65,8 @@ struct Game {
 	Mesh checkpoint_mesh;
 	Mesh checkpoint_collected_mesh;
 	Mesh goal_mesh;
+	Mesh score_mesh;
+	Mesh instructions_mesh;
 
 	GLuint meshes_for_simple_shading_vao = -1U; //vertex array object that describes how to connect the meshes_vbo to the simple_shading_program
 
@@ -74,7 +76,7 @@ struct Game {
 	std::vector< Mesh const * > board_meshes; //wall, floor
 	std::vector< Mesh const * > goal_meshes; //checkpoint, goal, goop
 	glm::uvec2 player = glm::uvec2(1,1);
-	int32_t checkpoints = 0;
+	uint32_t checkpoints = 10;
 	bool won = false;
 
 	void create_board(); //create a new, random board solvable from current player position

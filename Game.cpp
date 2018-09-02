@@ -181,6 +181,8 @@ Game::Game() {
 		checkpoint_mesh = lookup("Checkpoint");
 		checkpoint_collected_mesh = lookup("CheckpointCollected");
 		goal_mesh = lookup("Goal");
+		score_mesh = lookup("Score");
+		instructions_mesh = lookup("Instructions");
 	}
 
 	{ //create vertex array object to hold the map from the mesh vertex buffer to shader program attributes:
@@ -300,7 +302,7 @@ void Game::draw(glm::uvec2 drawable_size) {
 		world_to_clip = glm::mat4(
 			scale / aspect, 0.0f, 0.0f, 0.0f,
 			0.0f, scale, 0.0f, 0.0f,
-			0.0f, 0.0f,-1.0f, 0.0f,
+			0.0f, 0.0f,-0.1f, 0.0f, //<-- by scaling z by -0.1f we get usable z range of 10 (near) to -10 (far)
 			-(scale / aspect) * center.x, -scale * center.y, 0.0f, 1.0f
 		) * shear ;
 	}
@@ -366,6 +368,44 @@ void Game::draw(glm::uvec2 drawable_size) {
 	);
 
 
+	//draw score on left edge of board:
+	for (uint32_t c = 0; c < checkpoints; ++c) {
+		float s = 0.25f;
+		glm::vec3 at = glm::vec3(
+			0.5f + (float(c % 4) - 2.0f + 0.5f) * (0.9f * s),
+			1.0f + ((c / 4) + 0.6f) * (0.9f * s),
+			1.0f
+		);
+		draw_mesh(checkpoint_mesh,
+			glm::mat4(
+				s, 0.0f, 0.0f, 0.0f,
+				0.0f, s, 0.0f, 0.0f,
+				0.0f, 0.0f, s, 0.0f,
+				at.x, at.y, at.z, 1.0f
+			)
+		);
+	}
+
+	//some text labels + instructions:
+	draw_mesh(score_mesh,
+		glm::mat4(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.5f, 0.5f, 1.0f, 1.0f
+		)
+	);
+	draw_mesh(instructions_mesh,
+		glm::mat4(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			board_size.x-0.5f, board_size.y-0.5f, 1.0f, 1.0f
+		)
+	);
+
+
+
 	glUseProgram(0);
 
 	GL_ERRORS();
@@ -399,6 +439,9 @@ static GLuint compile_shader(GLenum type, std::string const &source) {
 
 void Game::create_board() {
 	static std::mt19937 mt(0xbead1234);
+
+	//can't currently be winning on a just-made board:
+	won = false;
 
 	//remove everything:
 	board_meshes.assign(board_size.x * board_size.y, &wall_mesh);
@@ -439,7 +482,7 @@ void Game::create_board() {
 	//try to generate several goals:
 	uint32_t goals = 0;
 	glm::uvec2 prev_goal = player;
-	while (goals < 2) {
+	while (goals <= 2) {
 		//run some random walks to check where player is likely to end up starting at previous goal:
 		std::vector< uint32_t > board_counts(board_size.x * board_size.y, 0);
 		for (uint32_t iter = 0; iter < 100; ++iter) {
