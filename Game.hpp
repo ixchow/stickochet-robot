@@ -58,27 +58,27 @@ struct Game {
 		GLsizei count = 0;
 	};
 
-	Mesh tile_mesh;
-	Mesh cursor_mesh;
-	Mesh doll_mesh;
-	Mesh egg_mesh;
-	Mesh cube_mesh;
+	Mesh wall_mesh;
+	Mesh floor_mesh;
+	Mesh player_mesh;
+	Mesh goop_mesh;
+	Mesh checkpoint_mesh;
+	Mesh checkpoint_collected_mesh;
+	Mesh goal_mesh;
 
 	GLuint meshes_for_simple_shading_vao = -1U; //vertex array object that describes how to connect the meshes_vbo to the simple_shading_program
 
 	//------- game state -------
 
-	glm::uvec2 board_size = glm::uvec2(5,4);
-	std::vector< Mesh const * > board_meshes;
-	std::vector< glm::quat > board_rotations;
+	glm::uvec2 board_size = glm::uvec2(6,6);
+	std::vector< Mesh const * > board_meshes; //wall, floor
+	std::vector< Mesh const * > goal_meshes; //checkpoint, goal, goop
+	glm::uvec2 player = glm::uvec2(1,1);
+	int32_t checkpoints = 0;
+	bool won = false;
 
-	glm::uvec2 cursor = glm::vec2(0,0);
+	void create_board(); //create a new, random board solvable from current player position
 
-	struct {
-		bool roll_left = false;
-		bool roll_right = false;
-		bool roll_up = false;
-		bool roll_down = false;
-	} controls;
+	void move_player(int32_t dx, int32_t dy); //slide player in a given direction
 
 };

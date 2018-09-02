@@ -11,6 +11,7 @@
 #include <map>
 #include <cstddef>
 #include <random>
+#include <algorithm>
 
 //helper defined later; throws if shader compilation fails:
 static GLuint compile_shader(GLenum type, std::string const &source);
@@ -173,11 +174,13 @@ Game::Game() {
 			}
 			return f->second;
 		};
-		tile_mesh = lookup("Tile");
-		cursor_mesh = lookup("Cursor");
-		doll_mesh = lookup("Doll");
-		egg_mesh = lookup("Egg");
-		cube_mesh = lookup("Cube");
+		wall_mesh = lookup("Wall");
+		floor_mesh = lookup("Floor");
+		player_mesh = lookup("Player");
+		goop_mesh = lookup("Goop");
+		checkpoint_mesh = lookup("Checkpoint");
+		checkpoint_collected_mesh = lookup("CheckpointCollected");
+		goal_mesh = lookup("Goal");
 	}
 
 	{ //create vertex array object to hold the map from the mesh vertex buffer to shader program attributes:
@@ -202,16 +205,8 @@ Game::Game() {
 
 	//----------------
 	//set up game board with meshes and rolls:
-	board_meshes.reserve(board_size.x * board_size.y);
-	board_rotations.reserve(board_size.x * board_size.y);
-	std::mt19937 mt(0xbead1234);
-
-	std::vector< Mesh const * > meshes{ &doll_mesh, &egg_mesh, &cube_mesh };
-
-	for (uint32_t i = 0; i < board_size.x * board_size.y; ++i) {
-		board_meshes.emplace_back(meshes[mt()%meshes.size()]);
-		board_rotations.emplace_back(glm::quat());
-	}
+	board_meshes.resize(board_size.x * board_size.y, nullptr);
+	create_board();
 }
 
 Game::~Game() {
@@ -232,42 +227,29 @@ bool Game::handle_event(SDL_Event const &evt, glm::uvec2 window_size) {
 	if (evt.type == SDL_KEYDOWN && evt.key.repeat) {
 		return false;
 	}
-	//handle tracking the state of WSAD for roll control:
-	if (evt.type == SDL_KEYDOWN || evt.type == SDL_KEYUP) {
-		if (evt.key.keysym.scancode == SDL_SCANCODE_W) {
-			controls.roll_up = (evt.type == SDL_KEYDOWN);
-			return true;
-		} else if (evt.key.keysym.scancode == SDL_SCANCODE_S) {
-			controls.roll_down = (evt.type == SDL_KEYDOWN);
-			return true;
-		} else if (evt.key.keysym.scancode == SDL_SCANCODE_A) {
-			controls.roll_left = (evt.type == SDL_KEYDOWN);
-			return true;
-		} else if (evt.key.keysym.scancode == SDL_SCANCODE_D) {
-			controls.roll_right = (evt.type == SDL_KEYDOWN);
-			return true;
-		}
-	}
-	//move cursor on L/R/U/D press:
+	//move player on L/R/U/D press:
 	if (evt.type == SDL_KEYDOWN && evt.key.repeat == 0) {
 		if (evt.key.keysym.scancode == SDL_SCANCODE_LEFT) {
-			if (cursor.x > 0) {
-				cursor.x -= 1;
-			}
+			move_player(-1, 0);
 			return true;
 		} else if (evt.key.keysym.scancode == SDL_SCANCODE_RIGHT) {
-			if (cursor.x + 1 < board_size.x) {
-				cursor.x += 1;
-			}
+			move_player( 1, 0);
 			return true;
 		} else if (evt.key.keysym.scancode == SDL_SCANCODE_UP) {
-			if (cursor.y + 1 < board_size.y) {
-				cursor.y += 1;
-			}
+			move_player( 0, 1);
 			return true;
 		} else if (evt.key.keysym.scancode == SDL_SCANCODE_DOWN) {
-			if (cursor.y > 0) {
-				cursor.y -= 1;
+			move_player( 0,-1);
+			return true;
+		} else if (evt.key.keysym.scancode == SDL_SCANCODE_BACKSPACE) {
+			//backspace: give up
+			if (checkpoints > 0) checkpoints -= 1;
+			create_board();
+			return true;
+		} else if (evt.key.keysym.scancode == SDL_SCANCODE_SPACE) {
+			//space (on goal): next level
+			if (won) {
+				create_board();
 			}
 			return true;
 		}
@@ -276,33 +258,6 @@ bool Game::handle_event(SDL_Event const &evt, glm::uvec2 window_size) {
 }
 
 void Game::update(float elapsed) {
-	//if the roll keys are pressed, rotate everything on the same row or column as the cursor:
-	glm::quat dr = glm::quat(1.0f, 0.0f, 0.0f, 0.0f);
-	float amt = elapsed * 1.0f;
-	if (controls.roll_left) {
-		dr = glm::angleAxis(amt, glm::vec3(0.0f, 1.0f, 0.0f)) * dr;
-	}
-	if (controls.roll_right) {
-		dr = glm::angleAxis(-amt, glm::vec3(0.0f, 1.0f, 0.0f)) * dr;
-	}
-	if (controls.roll_up) {
-		dr = glm::angleAxis(amt, glm::vec3(1.0f, 0.0f, 0.0f)) * dr;
-	}
-	if (controls.roll_down) {
-		dr = glm::angleAxis(-amt, glm::vec3(1.0f, 0.0f, 0.0f)) * dr;
-	}
-	if (dr != glm::quat()) {
-		for (uint32_t x = 0; x < board_size.x; ++x) {
-			glm::quat &r = board_rotations[cursor.y * board_size.x + x];
-			r = glm::normalize(dr * r);
-		}
-		for (uint32_t y = 0; y < board_size.y; ++y) {
-			if (y != cursor.y) {
-				glm::quat &r = board_rotations[y * board_size.x + cursor.x];
-				r = glm::normalize(dr * r);
-			}
-		}
-	}
 }
 
 void Game::draw(glm::uvec2 drawable_size) {
@@ -311,14 +266,35 @@ void Game::draw(glm::uvec2 drawable_size) {
 	{
 		float aspect = float(drawable_size.x) / float(drawable_size.y);
 
-		//want scale such that board * scale fits in [-aspect,aspect]x[-1.0,1.0] screen box:
+		//weird shear transform that will be applied during projection for artistic reasons:
+		glm::mat4 shear = glm::mat4(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			-0.07f, 0.9f, 0.0f, 0.0f,
+			 0.0f, 0.2f, 1.0f, 0.0f,
+			 0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		//figure out bounding box of board when transformed by shear:
+		glm::vec2 board_min = glm::vec2(std::numeric_limits< float >::infinity());
+		glm::vec2 board_max = glm::vec2(-std::numeric_limits< float >::infinity());
+		for (float cx : { 0.5f, board_size.x - 0.5f }) {
+			for (float cy : { 0.5f, board_size.y - 0.5f }) {
+				for (float cz : { 0.0f, 1.0f }) {
+					glm::vec2 pt = glm::vec2(shear * glm::vec4(cx, cy, cz, 1.0f));
+					board_min = glm::min(board_min, pt);
+					board_max = glm::max(board_max, pt);
+				}
+			}
+		}
+
+		//want scale such that [board_min,board_max] * scale fits in [-aspect,aspect]x[-1.0,1.0] screen box:
 		float scale = glm::min(
-			2.0f * aspect / float(board_size.x),
-			2.0f / float(board_size.y)
+			2.0f * aspect / float(board_max.x - board_min.x),
+			2.0f / float(board_max.y - board_min.y)
 		);
 
 		//center of board will be placed at center of screen:
-		glm::vec2 center = 0.5f * glm::vec2(board_size);
+		glm::vec2 center = 0.5f * (board_max + board_min);
 
 		//NOTE: glm matrices are specified in column-major order
 		world_to_clip = glm::mat4(
@@ -326,7 +302,7 @@ void Game::draw(glm::uvec2 drawable_size) {
 			0.0f, scale, 0.0f, 0.0f,
 			0.0f, 0.0f,-1.0f, 0.0f,
 			-(scale / aspect) * center.x, -scale * center.y, 0.0f, 1.0f
-		);
+		) * shear ;
 	}
 
 	//set up graphics pipeline to use data from the meshes and the simple shading program:
@@ -360,14 +336,6 @@ void Game::draw(glm::uvec2 drawable_size) {
 
 	for (uint32_t y = 0; y < board_size.y; ++y) {
 		for (uint32_t x = 0; x < board_size.x; ++x) {
-			draw_mesh(tile_mesh,
-				glm::mat4(
-					1.0f, 0.0f, 0.0f, 0.0f,
-					0.0f, 1.0f, 0.0f, 0.0f,
-					0.0f, 0.0f, 1.0f, 0.0f,
-					x+0.5f, y+0.5f,-0.5f, 1.0f
-				)
-			);
 			draw_mesh(*board_meshes[y*board_size.x+x],
 				glm::mat4(
 					1.0f, 0.0f, 0.0f, 0.0f,
@@ -375,16 +343,25 @@ void Game::draw(glm::uvec2 drawable_size) {
 					0.0f, 0.0f, 1.0f, 0.0f,
 					x+0.5f, y+0.5f, 0.0f, 1.0f
 				)
-				* glm::mat4_cast(board_rotations[y*board_size.x+x])
 			);
+			if (goal_meshes[y*board_size.x+x]) {
+				draw_mesh(*goal_meshes[y*board_size.x+x],
+					glm::mat4(
+						1.0f, 0.0f, 0.0f, 0.0f,
+						0.0f, 1.0f, 0.0f, 0.0f,
+						0.0f, 0.0f, 1.0f, 0.0f,
+						x+0.5f, y+0.5f, 0.0f, 1.0f
+					)
+				);
+			}
 		}
 	}
-	draw_mesh(cursor_mesh,
+	draw_mesh(player_mesh,
 		glm::mat4(
 			1.0f, 0.0f, 0.0f, 0.0f,
 			0.0f, 1.0f, 0.0f, 0.0f,
 			0.0f, 0.0f, 1.0f, 0.0f,
-			cursor.x+0.5f, cursor.y+0.5f, 0.0f, 1.0f
+			player.x+0.5f, player.y+0.5f, 0.0f, 1.0f
 		)
 	);
 
@@ -417,4 +394,128 @@ static GLuint compile_shader(GLenum type, std::string const &source) {
 		throw std::runtime_error("Failed to compile shader.");
 	}
 	return shader;
+}
+
+
+void Game::create_board() {
+	static std::mt19937 mt(0xbead1234);
+
+	//remove everything:
+	board_meshes.assign(board_size.x * board_size.y, &wall_mesh);
+	for (uint32_t x = 1; x + 1 < board_size.x; ++x) {
+		for (uint32_t y = 1; y + 1 < board_size.y; ++y) {
+			board_meshes[y*board_size.x + x] = &floor_mesh;
+		}
+	}
+	goal_meshes.assign(board_size.x * board_size.y, nullptr);
+
+	auto random_board_position = [&,this](){
+		return glm::uvec2(
+			mt() % (board_size.x-2) + 1,
+			mt() % (board_size.y-2) + 1
+		);
+	};
+
+	{ //place some random walls:
+		uint32_t walls = (mt() % 8) + 2;
+		for (uint32_t w = 0; w < walls; ++w) {
+			//note: may end up placing walls atop other walls, but that's fine
+			glm::uvec2 pos = random_board_position();
+			if (pos == player) continue; //shouldn't place walls on player, though.
+			board_meshes[pos.y*board_size.x+pos.x] = &wall_mesh;
+		}
+	}
+
+	{ //place some random goops:
+		uint32_t goops = (mt() % 4);
+		for (uint32_t g = 0; g < goops; ++g) {
+			glm::uvec2 pos = random_board_position();
+			if (board_meshes[pos.y*board_size.x+pos.x] != &wall_mesh) {
+				goal_meshes[pos.y*board_size.x+pos.x] = &goop_mesh;
+			}
+		}
+	}
+
+	//try to generate several goals:
+	uint32_t goals = 0;
+	glm::uvec2 prev_goal = player;
+	while (goals < 2) {
+		//run some random walks to check where player is likely to end up starting at previous goal:
+		std::vector< uint32_t > board_counts(board_size.x * board_size.y, 0);
+		for (uint32_t iter = 0; iter < 100; ++iter) {
+			glm::vec2 at = prev_goal;
+			for (uint32_t step = 0; step < 20; ++step) {
+				static const glm::ivec2 directions[4] = {
+					glm::ivec2(-1,0), glm::ivec2(1,0),
+					glm::ivec2(0,-1), glm::ivec2(0,1)
+				};
+				glm::vec2 d = directions[mt() % 4];
+				while (board_meshes[(at.y+d.y)*board_size.x+(at.x+d.x)] != &wall_mesh) {
+					at += d;
+					if (goal_meshes[at.y*board_size.x+at.x] == &goop_mesh) break;
+				}
+				board_counts[at.y*board_size.x+at.x] += 1;
+			}
+		}
+		//make a list of possible checkpoint cells based on likelihoods:
+		std::vector< glm::uvec2 > possible_cells;
+		for (uint32_t y = 0; y < board_size.y; ++y) {
+			for (uint32_t x = 0; x < board_size.x; ++x) {
+				if (x == player.x && y == player.y) continue; //don't place checkpoint at player
+				if (goal_meshes[y*board_size.x+x] != nullptr) continue; //don't overlap goals
+				if (board_counts[y*board_size.x+x] > 0) {
+					possible_cells.emplace_back(x,y);
+				}
+			}
+		}
+		//ran out of possible goal locations:
+		if (possible_cells.empty()) break;
+
+		//now sort list based on counts (smaller counts == harder):
+		std::stable_sort(possible_cells.begin(), possible_cells.end(), [&](glm::uvec2 a, glm::uvec2 b) {
+			return board_counts[a.y*board_size.x+a.x] < board_counts[b.y*board_size.x+b.x];
+		});
+
+		//pick one for the goal:
+		//limit to picking cells in the highest 25% of difficulty:
+		uint32_t limit = std::max< uint32_t >(1, possible_cells.size() / 4);
+		//extend limit to all cells with the same count:
+		while (limit + 1 < possible_cells.size() && board_counts[possible_cells[limit].y*board_size.x+possible_cells[limit].x] == board_counts[possible_cells[limit+1].y*board_size.x+possible_cells[limit+1].x]) ++limit;
+		glm::uvec2 g = possible_cells[mt() % limit];
+
+		assert(goal_meshes[g.y*board_size.x+g.x] == nullptr);
+		goal_meshes[g.y*board_size.x+g.x] = &checkpoint_mesh;
+		++goals;
+		prev_goal = g;
+	}
+
+	if (goals == 0) {
+		//failed to generate a board with at least one goal, so retry:
+		create_board();
+		return;
+	}
+
+	//turn the last goal into the main goal:
+	goal_meshes[prev_goal.y*board_size.x+prev_goal.x] = &goal_mesh;
+
+}
+
+void Game::move_player(int32_t dx, int32_t dy) {
+	//step player until it is on goop or next tile is a wall
+	assert(player.x >= 1 && player.x + 1 < board_size.x);
+	assert(player.y >= 1 && player.y + 1 < board_size.y);
+	while (board_meshes[(player.y+dy)*board_size.x+(player.x+dx)] != &wall_mesh) {
+		player.x += dx;
+		player.y += dy;
+		//did the player step onto goop?
+		if (goal_meshes[player.y*board_size.x+player.x] == &goop_mesh) break;
+	}
+
+	//did the player gather a checkpoint?
+	if (goal_meshes[player.y*board_size.x+player.x] == &checkpoint_mesh) {
+		goal_meshes[player.y*board_size.x+player.x] = &checkpoint_collected_mesh;
+		checkpoints += 1;
+	}
+
+	won = (goal_meshes[player.y*board_size.x+player.x] == &goal_mesh);
 }
