@@ -82,9 +82,15 @@ for name in to_write:
 	uvs = None
 	if do_texcoord:
 		if len(obj.data.uv_layers) == 0:
-			print("WARNING: trying to export texcoord data, but object '" + name + "' does not uv data; will output (0.0, 0.0)")
+			print("WARNING: trying to export texcoord data, but object '" + name + "' does not have uv data; will output (0.0, 0.0)")
 		else:
 			uvs = obj.data.uv_layers.active.data
+
+	colors = None
+	if len(obj.data.vertex_colors) == 0:
+		print("WARNING: trying to export color data, but object '" + name + "' does not have color data; will output (0.5, 0.5, 0.5).")
+	else:
+		colors = obj.data.vertex_colors.active.data
 
 	#write the mesh:
 	for poly in mesh.polygons:
@@ -97,9 +103,11 @@ for name in to_write:
 				data += struct.pack('f', x)
 			for x in loop.normal:
 				data += struct.pack('f', x)
-			#TODO: set 'col' based on object's active vertex colors array.
-			# you should be able to use code much like the texcoord code below.
-			col = mathutils.Color((1.0, 1.0, 1.0))
+
+			if colors != None:
+				col = colors[poly.loop_indices[i]].color
+			else:
+				col = mathutils.Color((0.5, 0.5, 0.5))
 			data += struct.pack('BBBB', int(col.r * 255), int(col.g * 255), int(col.b * 255), 255)
 
 			if do_texcoord:
